@@ -9,6 +9,16 @@ use base qw(Exporter);
 
 our @EXPORT_OK = qw(histogram);
 
+my @scales = (1, 2, 5, 10, 25, 50, 100, 250, 500);
+push @scales, map { ( 1 * $_, 2.5 * $_, 5 * $_) } (
+		1000, 10_000, 100_000
+	);
+
+my @binsizes = (1, 2, 5, 10, 25, 50, 100, 250, 500);
+push @binsizes, map { ( 1 * $_, 2.5 * $_, 5 * $_ ) } (
+		1000, 10_000, 100_000
+	);
+
 sub histogram {
 	my ($data, $opts) = @_;
 
@@ -16,13 +26,16 @@ sub histogram {
 		$data = [@_];
 		$opts = {};
 	}
+	my $pts = scalar @$data;
 	$opts->{bins} ||= 8;
+	$opts->{bins} = $pts if $pts < $opts->{bins};
 	$opts->{histogram_size} ||= 50;
 
 	my $vcnt = scalar @$data;
 	my @data = sort { $a <=> $b } @$data;
 
-	my ($min, $max, $rmin, $rmax) = _check_outliers($vcnt, $opts, @data);
+	my ($min, $max, $rmin, $rmax, $pmin, $pmax)
+			= _check_outliers($vcnt, $opts, @data);
 
 	my ($scale, $binsize, %bins)
 			= _get_frequency($min,$max,$rmin,$rmax, $opts, \@data);
@@ -50,7 +63,7 @@ sub histogram {
 	if ($max != $rmax) {
 		my $freq = _ceil(($bins{'max'}||0)/$scale);
 		$hist.= sprintf "%8d %-${hsize}s - %6d\n",
-				$rmax+1,
+				$pmax,
 				"#" x $freq,
 				($bins{'max'}||0);	
 	}
@@ -65,7 +78,7 @@ sub _get_frequency {
 	$bins-- if $rmax != $max;
 	my $hsize = $opts->{histogram_size};
 
-	my $binsize = _ceil( ($rmax - $rmin) / $bins );
+	my $binsize = _best_scale( ($rmax - $rmin) / $bins, @binsizes );
 
 	for my $v (@$data) {
 		if ( $v < $rmin ) {
@@ -86,7 +99,8 @@ sub _get_frequency {
 		$maxval = $value if $value > $maxval;
 	}
 
-	$scale = _ceil($maxval/$hsize) if $maxval>$hsize;
+	$scale = _best_scale($maxval/$hsize, @scales)
+		if $maxval>$hsize;
 
 	return $scale, $binsize, %bins;
 }
@@ -109,20 +123,24 @@ sub _check_outliers {
 	my $val = $data[0];
 
 	my $c = 0;
-	my $binsize = ($tmax - $tmin) / ($bins * 2);
-	my ($rmin,$rmax) = (0, 0);
+	my $bn = $bins > 2 ? $bins - 2 : 2;
+	my $bs = ($tmax - $tmin) / $bn;
+	my $binsize = _best_scale($bs, @binsizes);
+	;
+	my ($rmin, $rmax) = (0, 0);
+	my ($pmin, $pmax) = (0, 0);
 	while ( ($tmin != $rmin) or ($tmax != $rmax) ) {
 		$rmin = $tmin;
 		$rmax = $tmax;
-		my $val = $data[0];
+		$val = $data[0];
 		for my $i (1..$cnt) {
 			# point with more than half the size of a bin are grouped
 			# in a big bin, in the beginning.
 			$c = $data[$i] - $val;
-			if ( $c > $binsize) {
+			if ( $c > $binsize ) {
 				$tmin = $data[$i];
 				$val = $data[$i];
-				$binsize = ($tmax - $tmin) / ($bins * 2);
+				$binsize = ($tmax - $tmin) / $bn;
 			}
 			last if $i >= $cnt;
 		}
@@ -134,13 +152,24 @@ sub _check_outliers {
 			if ($c > $binsize) {
 				$tmax = $v1;
 				$val = $v1;
-				$binsize = ($tmax - $tmin) / ($bins * 2);
+				$binsize = _best_scale(($tmax - $tmin) / $bn, @binsizes);;
 			}
+			$val = $v1;
 			last if $i > $cnt;
 		}
 	}
 
-	return ($min, $max, $rmin, $rmax);
+	return ($min, $max, $rmin, $rmax, $pmin, $pmax);
+}
+
+sub _best_scale {
+	my ($val, @opts) = @_;
+
+	for my $opt (@opts) {
+		return $opt if $opt > $val;
+	}
+
+	return 99_999_999_999;
 }
 
 1; # End of Text::Histogram
@@ -157,21 +186,22 @@ Version 0.01
 
 =head1 SYNOPSIS
 
-Quick summary of what the module does.
+	use Text::Histogram qw(histogram);
 
-Perhaps a little code snippet.
-
-    use Text::Histogram;
-
-    my $foo = Text::Histogram->new();
-    ...
+	print histogram([1,2,3,4,5,2,3,2,1,3,4,5]);
 
 =head1 EXPORT
 
-A list of functions that can be exported.  You can delete this section
-if you don't export anything, such as for a purely object-oriented module.
+=head2 histogram(\@data, [\%opts]);
 
-=head1 SUBROUTINES/METHODS
+Text::Histogram exports the sub histogram, that takes an arrayref with
+the point to create the histogram from and an optional hashref of options.
+
+the optional hash can have the following options:
+
+=over 4
+
+=back
 
 =head1 AUTHOR
 
@@ -181,9 +211,13 @@ Marco Neves, C<< <neves at cpan.org> >>
 
 Please report any bugs or feature requests to 
 C<bug-text-histogram at rt.cpan.org>, or through the web interface 
-at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Text-Histogram>. 
+at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Text-Histogram>.
+
 I will be notified, and then you'll automatically be notified of 
 progress on your bug as I make changes.
+
+You can also use github: https://github.com/themage/perl-text-histogram
+or http://www.magick-source.net/projects/text-histogram
 
 =head1 SUPPORT
 
@@ -192,6 +226,8 @@ You can find documentation for this module with the perldoc command.
     perldoc Text::Histogram
 
 You can also look for information at:
+
+http://www.magick-source.net/projects/text-histogram/wiki
 
 =over 4
 
@@ -213,9 +249,7 @@ L<http://search.cpan.org/dist/Text-Histogram/>
 
 =back
 
-
 =head1 ACKNOWLEDGEMENTS
-
 
 =head1 LICENSE AND COPYRIGHT
 
@@ -226,7 +260,6 @@ under the terms of either: the GNU General Public License as published
 by the Free Software Foundation; or the Artistic License.
 
 See http://dev.perl.org/licenses/ for more information.
-
 
 =cut
 
